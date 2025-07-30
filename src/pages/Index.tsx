@@ -20,7 +20,6 @@ import { cn } from "@/lib/utils";
 import { Calendar as CalendarIcon, LogOut } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 
-// Validation schema for the form
 const formSchema = z.object({
   date: z.date({ required_error: "Datum je povinné." }),
   morning_cash: z.coerce.number().int().min(0, "Hodnota nesmí být záporná."),
@@ -37,8 +36,8 @@ type Earnings = {
   date: string;
   total_orders: number;
   total_earnings: number;
-  cash_earnings: number; // Dýška
-  online_earnings: number; // Platba za objednávky
+  cash_earnings: number;
+  online_earnings: number;
   bonus_earnings: number;
 };
 
