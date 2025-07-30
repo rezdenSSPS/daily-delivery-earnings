@@ -10,22 +10,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis, Legend } from "recharts";
 import { toast } from "@/components/ui/sonner";
-import { cn } from "@/lib/utils";
-import { Calendar as CalendarIcon, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 
+// Validation schema for the form
 const formSchema = z.object({
-  date: z.date({ required_error: "Datum je povinné." }),
   morning_cash: z.coerce.number().int().min(0, "Hodnota nesmí být záporná."),
+  evening_cash: z.coerce.number().int().min(0, "Hodnota nesmí být záporná."),
   total_orders: z.coerce.number().int().min(0, "Hodnota nesmí být záporná."),
   cash_orders: z.coerce.number().int().min(0, "Hodnota nesmí být záporná."),
-  evening_cash: z.coerce.number().int().min(0, "Hodnota nesmí být záporná."),
+  online_tips: z.coerce.number().int().min(0, "Hodnota nesmí být záporná.").default(0),
 }).refine(data => data.cash_orders <= data.total_orders, {
   message: "Hotovostní objednávky nemohou být vyšší než celkový počet.",
   path: ["cash_orders"],
@@ -37,6 +35,7 @@ type Earnings = {
   total_orders: number;
   total_earnings: number;
   cash_earnings: number;
+  online_tips: number;
   online_earnings: number;
   bonus_earnings: number;
 };
@@ -65,7 +64,7 @@ const Dashboard = ({ session }: { session: Session }) => {
       const { error } = await supabase.from("daily_earnings").insert([
         {
           ...newEarning,
-          date: format(newEarning.date, "yyyy-MM-dd"),
+          date: format(new Date(), "yyyy-MM-dd"), // Datum se nastaví automaticky
           user_id: user.id,
         },
       ]);
@@ -74,13 +73,7 @@ const Dashboard = ({ session }: { session: Session }) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["earnings"] });
       toast.success("Záznam byl úspěšně uložen!");
-      form.reset({
-        date: new Date(),
-        morning_cash: 0,
-        total_orders: 0,
-        cash_orders: 0,
-        evening_cash: 0,
-      });
+      form.reset();
     },
     onError: (error) => {
       toast.error(`Chyba při ukládání: ${error.message}`);
@@ -90,11 +83,11 @@ const Dashboard = ({ session }: { session: Session }) => {
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      date: new Date(),
       morning_cash: 0,
+      evening_cash: 0,
       total_orders: 0,
       cash_orders: 0,
-      evening_cash: 0,
+      online_tips: 0,
     },
   });
 
@@ -107,7 +100,7 @@ const Dashboard = ({ session }: { session: Session }) => {
     .map(e => ({
       date: format(new Date(e.date), "d. M.", { locale: cs }),
       "Celkem Kč": e.total_earnings,
-      "Dýška Kč": e.cash_earnings,
+      "Dýška celkem Kč": e.cash_earnings + e.online_tips,
     }))
     .reverse();
     
@@ -125,52 +118,12 @@ const Dashboard = ({ session }: { session: Session }) => {
         <div className="lg:col-span-1">
           <Card>
             <CardHeader>
-              <CardTitle>Nový denní záznam</CardTitle>
+              <CardTitle>Nový záznam ({format(new Date(), "d. MMMM", { locale: cs })})</CardTitle>
               <CardDescription>Zadej údaje ze své poslední směny.</CardDescription>
             </CardHeader>
             <CardContent>
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                  <FormField
-                    control={form.control}
-                    name="date"
-                    render={({ field }) => (
-                      <FormItem className="flex flex-col">
-                        <FormLabel>Datum</FormLabel>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <FormControl>
-                              <Button
-                                variant={"outline"}
-                                className={cn(
-                                  "w-full pl-3 text-left font-normal",
-                                  !field.value && "text-muted-foreground"
-                                )}
-                              >
-                                {field.value ? (
-                                  format(field.value, "PPP", { locale: cs })
-                                ) : (
-                                  <span>Vyber datum</span>
-                                )}
-                                <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                              </Button>
-                            </FormControl>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-auto p-0" align="start">
-                            <Calendar
-                              mode="single"
-                              selected={field.value}
-                              onSelect={field.onChange}
-                              disabled={(date) => date > new Date() || date < new Date("1900-01-01")}
-                              initialFocus
-                              locale={cs}
-                            />
-                          </PopoverContent>
-                        </Popover>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
                   <FormField control={form.control} name="morning_cash" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Hotovost ráno (Kč)</FormLabel>
@@ -199,6 +152,13 @@ const Dashboard = ({ session }: { session: Session }) => {
                       <FormMessage />
                     </FormItem>
                   )} />
+                  <FormField control={form.control} name="online_tips" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Dýška online (Kč)</FormLabel>
+                      <FormControl><Input type="number" {...field} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
                   <Button type="submit" className="w-full" disabled={mutation.isPending}>
                     {mutation.isPending ? "Ukládám..." : "Uložit záznam"}
                   </Button>
@@ -223,7 +183,7 @@ const Dashboard = ({ session }: { session: Session }) => {
                   <ChartTooltip content={<ChartTooltipContent />} />
                   <Legend />
                   <Bar dataKey="Celkem Kč" fill="hsl(var(--primary))" radius={4} />
-                  <Bar dataKey="Dýška Kč" fill="hsl(var(--accent))" radius={4} />
+                  <Bar dataKey="Dýška celkem Kč" fill="hsl(var(--accent))" radius={4} />
                 </BarChart>
               </ChartContainer>
             </CardContent>
@@ -238,17 +198,18 @@ const Dashboard = ({ session }: { session: Session }) => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Datum</TableHead>
-                    <TableHead className="text-right">Objednávky</TableHead>
+                    <TableHead className="text-right">Obj.</TableHead>
                     <TableHead className="text-right">Platba za obj.</TableHead>
                     <TableHead className="text-right">Bonus</TableHead>
-                    <TableHead className="text-right">Dýška</TableHead>
+                    <TableHead className="text-right">Dýška hot.</TableHead>
+                    <TableHead className="text-right">Dýška onl.</TableHead>
                     <TableHead className="text-right font-bold">Celkem</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}><TableCell colSpan={6} className="h-12 text-center">Načítání...</TableCell></TableRow>
+                        <TableRow key={i}><TableCell colSpan={7} className="h-12 text-center">Načítání...</TableCell></TableRow>
                      ))
                   ) : (
                     earnings.map((e) => (
@@ -258,6 +219,7 @@ const Dashboard = ({ session }: { session: Session }) => {
                         <TableCell className="text-right">{e.online_earnings} Kč</TableCell>
                         <TableCell className="text-right">{e.bonus_earnings} Kč</TableCell>
                         <TableCell className="text-right">{e.cash_earnings} Kč</TableCell>
+                        <TableCell className="text-right">{e.online_tips} Kč</TableCell>
                         <TableCell className="text-right font-bold">{e.total_earnings} Kč</TableCell>
                       </TableRow>
                     ))
