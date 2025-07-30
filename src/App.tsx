@@ -13,10 +13,12 @@ const queryClient = new QueryClient();
 
 const App = () => {
   const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+      setLoading(false);
     });
 
     const {
@@ -27,6 +29,10 @@ const App = () => {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  if (loading) {
+    return null; // Můžeš sem dát i nějaký hezký loading spinner
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
