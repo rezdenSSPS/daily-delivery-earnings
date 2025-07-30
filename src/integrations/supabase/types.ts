@@ -14,13 +14,73 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      daily_earnings: {
+        Row: {
+          bonus_earnings: number
+          cash_earnings: number
+          cash_orders: number
+          created_at: string
+          date: string
+          evening_cash: number
+          id: string
+          morning_cash: number
+          online_earnings: number
+          total_earnings: number
+          total_orders: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bonus_earnings?: number
+          cash_earnings?: number
+          cash_orders: number
+          created_at?: string
+          date: string
+          evening_cash: number
+          id?: string
+          morning_cash: number
+          online_earnings?: number
+          total_earnings?: number
+          total_orders: number
+          updated_at?: string
+          user_id?: string
+        }
+        Update: {
+          bonus_earnings?: number
+          cash_earnings?: number
+          cash_orders?: number
+          created_at?: string
+          date?: string
+          evening_cash?: number
+          id?: string
+          morning_cash?: number
+          online_earnings?: number
+          total_earnings?: number
+          total_orders?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      calculate_earnings: {
+        Args: {
+          total_orders: number
+          cash_orders: number
+          morning_cash: number
+          evening_cash: number
+        }
+        Returns: {
+          cash_earnings: number
+          online_earnings: number
+          bonus_earnings: number
+          total_earnings: number
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
