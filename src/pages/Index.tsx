@@ -34,9 +34,6 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 
-// Klíč pro ukládání do localStorage
-const MORNING_CASH_STORAGE_KEY = 'daily-earnings-morning-cash';
-
 // Validation schema for the form
 const formSchema = z.object({
   morning_cash: z.coerce.number().int().min(0, "Hodnota nesmí být záporná."),
@@ -71,11 +68,14 @@ type Summary = {
     grand_total_earnings: number;
 }
 
+type PendingShift = {
+    morning_cash: number;
+}
+
+// --- NOVÉ FUNKCE PRO PRÁCI S DATABÁZÍ ---
+
 const fetchEarnings = async () => {
-  const { data, error } = await supabase
-    .from("daily_earnings")
-    .select("*")
-    .order("date", { ascending: false });
+  const { data, error } = await supabase.from("daily_earnings").select("*").order("date", { ascending: false });
   if (error) throw new Error(error.message);
   return data;
 };
@@ -86,37 +86,69 @@ const fetchSummary = async (userId: string) => {
     return data[0];
 }
 
+// NOVÁ FUNKCE: Načte rozpracovanou směnu pro dnešní den
+const fetchPendingShift = async (userId: string) => {
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const { data, error } = await supabase
+        .from('pending_shifts')
+        .select('morning_cash')
+        .eq('user_id', userId)
+        .eq('date', today)
+        .single();
+    if (error && error.code !== 'PGRST116') { // Ignorujeme chybu "záznam nenalezen"
+        throw new Error(error.message);
+    }
+    return data;
+}
+
+
 const Dashboard = ({ session }: { session: Session }) => {
   const queryClient = useQueryClient();
 
-  const { data: earnings = [], isLoading: isLoadingEarnings } = useQuery<Earnings[]>({
-    queryKey: ["earnings"],
-    queryFn: fetchEarnings,
-  });
+  // --- DOTAZY NA DATA ---
+  const { data: earnings = [], isLoading: isLoadingEarnings } = useQuery<Earnings[]>({ queryKey: ["earnings"], queryFn: fetchEarnings });
+  const { data: summary, isLoading: isLoadingSummary } = useQuery<Summary>({ queryKey: ["summary", session.user.id], queryFn: () => fetchSummary(session.user.id) });
+  const { data: pendingShift } = useQuery<PendingShift | null>({ queryKey: ["pendingShift", session.user.id], queryFn: () => fetchPendingShift(session.user.id) });
 
-  const { data: summary, isLoading: isLoadingSummary } = useQuery<Summary>({
-      queryKey: ["summary", session.user.id],
-      queryFn: () => fetchSummary(session.user.id),
+
+  // --- MUTACE (ZÁPISY DO DATABÁZE) ---
+  const upsertMorningCashMutation = useMutation({
+      mutationFn: async (morningCash: number) => {
+        const today = format(new Date(), 'yyyy-MM-dd');
+        const { error } = await supabase.from('pending_shifts').upsert({
+            user_id: session.user.id,
+            date: today,
+            morning_cash: morningCash
+        }, { onConflict: 'user_id, date' }); // Pokud záznam existuje, aktualizuje ho
+        if (error) throw new Error(error.message);
+      },
+      onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ["pendingShift", session.user.id] });
+      },
+      onError: (error) => {
+          toast.error(`Chyba při ukládání ranní hotovosti: ${error.message}`);
+      }
   })
 
   const insertMutation = useMutation({
     mutationFn: async (newEarning: z.infer<typeof formSchema>) => {
-      const { error } = await supabase.from("daily_earnings").insert([
-        {
-          ...newEarning,
-          date: format(new Date(), "yyyy-MM-dd"),
-          user_id: session.user.id,
-        },
+      // 1. Uložíme finální záznam
+      const { error: insertError } = await supabase.from("daily_earnings").insert([
+        { ...newEarning, date: format(new Date(), "yyyy-MM-dd"), user_id: session.user.id },
       ]);
-      if (error) throw new Error(error.message);
+      if (insertError) throw new Error(insertError.message);
+
+      // 2. Smažeme dočasný záznam
+      const today = format(new Date(), 'yyyy-MM-dd');
+      const { error: deleteError } = await supabase.from('pending_shifts').delete().match({ user_id: session.user.id, date: today });
+      if (deleteError) throw new Error(deleteError.message);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["earnings"] });
       queryClient.invalidateQueries({ queryKey: ["summary"] });
+      queryClient.invalidateQueries({ queryKey: ["pendingShift"] });
       toast.success("Záznam byl úspěšně uložen!");
       form.reset();
-      // Po úspěšném odeslání vymažeme uloženou ranní hodnotu
-      localStorage.removeItem(MORNING_CASH_STORAGE_KEY);
     },
     onError: (error) => {
       toast.error(`Chyba při ukládání: ${error.message}`);
@@ -141,34 +173,16 @@ const Dashboard = ({ session }: { session: Session }) => {
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      morning_cash: 0,
-      evening_cash: 0,
-      total_orders: 0,
-      cash_orders: 0,
-      online_tips: 0,
+      morning_cash: 0, evening_cash: 0, total_orders: 0, cash_orders: 0, online_tips: 0,
     },
   });
 
-  // Efekt pro načtení ranní hotovosti z localStorage při startu
+  // EFEKT: Předvyplní ranní hotovost, když se načte z databáze
   useEffect(() => {
-    try {
-      const savedData = localStorage.getItem(MORNING_CASH_STORAGE_KEY);
-      if (savedData) {
-        const { date, value } = JSON.parse(savedData);
-        const today = format(new Date(), 'yyyy-MM-dd');
-
-        if (date === today && value) {
-          form.setValue('morning_cash', parseInt(value, 10));
-        } else {
-          // Pokud je záznam ze včerejška, smažeme ho
-          localStorage.removeItem(MORNING_CASH_STORAGE_KEY);
-        }
-      }
-    } catch (error) {
-      console.error("Nepodařilo se načíst data z localStorage", error);
+    if (pendingShift) {
+      form.setValue('morning_cash', pendingShift.morning_cash);
     }
-  }, [form]);
-
+  }, [pendingShift, form]);
 
   function onSubmit(values: z.infer<typeof formSchema>) {
     insertMutation.mutate(values);
@@ -208,27 +222,19 @@ const Dashboard = ({ session }: { session: Session }) => {
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
                   <FormField control={form.control} name="morning_cash" render={({ field }) => (
-                    <FormItem>
-                        <FormLabel>Hotovost ráno (Kč)</FormLabel>
-                        <FormControl>
-                            <Input 
-                                type="number" 
-                                {...field} 
-                                onChange={(e) => {
-                                    field.onChange(e);
-                                    // Při každé změně uložíme hodnotu do localStorage
-                                    try {
-                                        const today = format(new Date(), 'yyyy-MM-dd');
-                                        const dataToStore = { date: today, value: e.target.value };
-                                        localStorage.setItem(MORNING_CASH_STORAGE_KEY, JSON.stringify(dataToStore));
-                                    } catch (error) {
-                                        console.error("Nepodařilo se uložit data do localStorage", error);
-                                    }
-                                }}
-                            />
-                        </FormControl>
-                        <FormMessage />
-                    </FormItem>
+                    <FormItem><FormLabel>Hotovost ráno (Kč)</FormLabel><FormControl>
+                        <Input 
+                            type="number" 
+                            {...field}
+                            onBlur={(e) => { // Uloží se, když klikneš mimo políčko
+                                field.onBlur();
+                                const value = parseInt(e.target.value, 10);
+                                if (!isNaN(value)) {
+                                    upsertMorningCashMutation.mutate(value);
+                                }
+                            }}
+                        />
+                    </FormControl><FormMessage /></FormItem>
                   )} />
                   <FormField control={form.control} name="evening_cash" render={({ field }) => (
                     <FormItem><FormLabel>Hotovost večer (Kč)</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
