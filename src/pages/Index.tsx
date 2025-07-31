@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -32,6 +33,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+
+// Klíč pro ukládání do localStorage
+const MORNING_CASH_STORAGE_KEY = 'daily-earnings-morning-cash';
 
 // Validation schema for the form
 const formSchema = z.object({
@@ -111,6 +115,8 @@ const Dashboard = ({ session }: { session: Session }) => {
       queryClient.invalidateQueries({ queryKey: ["summary"] });
       toast.success("Záznam byl úspěšně uložen!");
       form.reset();
+      // Po úspěšném odeslání vymažeme uloženou ranní hodnotu
+      localStorage.removeItem(MORNING_CASH_STORAGE_KEY);
     },
     onError: (error) => {
       toast.error(`Chyba při ukládání: ${error.message}`);
@@ -142,6 +148,27 @@ const Dashboard = ({ session }: { session: Session }) => {
       online_tips: 0,
     },
   });
+
+  // Efekt pro načtení ranní hotovosti z localStorage při startu
+  useEffect(() => {
+    try {
+      const savedData = localStorage.getItem(MORNING_CASH_STORAGE_KEY);
+      if (savedData) {
+        const { date, value } = JSON.parse(savedData);
+        const today = format(new Date(), 'yyyy-MM-dd');
+
+        if (date === today && value) {
+          form.setValue('morning_cash', parseInt(value, 10));
+        } else {
+          // Pokud je záznam ze včerejška, smažeme ho
+          localStorage.removeItem(MORNING_CASH_STORAGE_KEY);
+        }
+      }
+    } catch (error) {
+      console.error("Nepodařilo se načíst data z localStorage", error);
+    }
+  }, [form]);
+
 
   function onSubmit(values: z.infer<typeof formSchema>) {
     insertMutation.mutate(values);
@@ -181,7 +208,27 @@ const Dashboard = ({ session }: { session: Session }) => {
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
                   <FormField control={form.control} name="morning_cash" render={({ field }) => (
-                    <FormItem><FormLabel>Hotovost ráno (Kč)</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
+                    <FormItem>
+                        <FormLabel>Hotovost ráno (Kč)</FormLabel>
+                        <FormControl>
+                            <Input 
+                                type="number" 
+                                {...field} 
+                                onChange={(e) => {
+                                    field.onChange(e);
+                                    // Při každé změně uložíme hodnotu do localStorage
+                                    try {
+                                        const today = format(new Date(), 'yyyy-MM-dd');
+                                        const dataToStore = { date: today, value: e.target.value };
+                                        localStorage.setItem(MORNING_CASH_STORAGE_KEY, JSON.stringify(dataToStore));
+                                    } catch (error) {
+                                        console.error("Nepodařilo se uložit data do localStorage", error);
+                                    }
+                                }}
+                            />
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
                   )} />
                   <FormField control={form.control} name="evening_cash" render={({ field }) => (
                     <FormItem><FormLabel>Hotovost večer (Kč)</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
